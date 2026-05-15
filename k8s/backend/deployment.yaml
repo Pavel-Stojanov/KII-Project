@@ -16,7 +16,6 @@ spec:
       containers:
         - name: backend
           image: frikzy/library-api-backend:latest
-          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           envFrom:
