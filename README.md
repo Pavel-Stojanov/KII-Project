@@ -135,9 +135,13 @@ kubectl apply -f argocd/application.yaml
 > what a subscription permits with
 > `az vm list-skus --location <region> --resource-type virtualMachines --all --query "[?restrictions[0]==null].name" -o tsv`.
 
-The app's public address is the external IP of the ingress controller
-(`kubectl get svc -n ingress-nginx ingress-nginx-controller`); the Ingress is
-host-less, so it serves directly on that IP.
+TLS is handled by **cert-manager**: install it once
+(`kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml`),
+and the `letsencrypt-prod` ClusterIssuer (`k8s/clusterissuer.yaml`) obtains a Let's
+Encrypt certificate for the Ingress host via an HTTP-01 challenge. The app is served
+over HTTPS at the Ingress host — a `nip.io` name mapped to the ingress controller's
+public IP (`kubectl get svc -n ingress-nginx ingress-nginx-controller`), so no
+external DNS is required.
 
 The Argo CD dashboard can be reached by port-forwarding `svc/argocd-server` in the
 `argocd` namespace (initial password: the `argocd-initial-admin-secret`, user `admin`).

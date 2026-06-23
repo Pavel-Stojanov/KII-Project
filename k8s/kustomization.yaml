@@ -13,6 +13,7 @@ resources:
   - backend/deployment.yaml
   - frontend/service.yaml
   - frontend/deployment.yaml
+  - clusterissuer.yaml
   - ingress.yaml
 
 images:

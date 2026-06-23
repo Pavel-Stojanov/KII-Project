@@ -5,10 +5,16 @@ metadata:
   namespace: library-api
   annotations:
     nginx.ingress.kubernetes.io/use-regex: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - library-api.20.240.36.239.nip.io
+      secretName: library-api-tls
   rules:
-    - http:
+    - host: library-api.20.240.36.239.nip.io
+      http:
         paths:
           - path: /api
             pathType: Prefix
