@@ -19,7 +19,7 @@ resources:
 images:
 - name: frikzy/library-api-backend
   newName: frikzy/library-api-backend
-  newTag: 26a009322fbee1ff096f7d121aa5a57520e1b8af
+  newTag: da5778f472fff6a4a18043d74a58893e97287d53
 - name: frikzy/library-api-frontend
   newName: frikzy/library-api-frontend
-  newTag: 26a009322fbee1ff096f7d121aa5a57520e1b8af
+  newTag: da5778f472fff6a4a18043d74a58893e97287d53
