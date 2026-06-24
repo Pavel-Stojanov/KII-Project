@@ -123,7 +123,8 @@ az aks get-credentials -g library-api -n library-api
 
 helm upgrade --install ingress-nginx ingress-nginx \
   --repo https://kubernetes.github.io/ingress-nginx \
-  --namespace ingress-nginx --create-namespace
+  --namespace ingress-nginx --create-namespace \
+  --set controller.service.annotations."service\.beta\.kubernetes\.io/azure-load-balancer-health-probe-request-path"=/healthz
 
 kubectl create namespace argocd
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
@@ -134,6 +135,11 @@ kubectl apply -f argocd/application.yaml
 > allow-list; `swedencentral` + `Standard_D2s_v3` is one valid combination. List
 > what a subscription permits with
 > `az vm list-skus --location <region> --resource-type virtualMachines --all --query "[?restrictions[0]==null].name" -o tsv`.
+
+The `azure-load-balancer-health-probe-request-path=/healthz` annotation is required:
+because the Ingress is host-based, the Azure LoadBalancer's default HTTP health probe
+to `/` would get a 404 (no matching host on a bare probe request) and mark the node
+unhealthy, so it must probe ingress-nginx's always-200 `/healthz` endpoint instead.
 
 TLS is handled by **cert-manager**: install it once
 (`kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml`),
