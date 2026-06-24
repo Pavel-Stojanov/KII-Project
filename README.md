@@ -33,8 +33,8 @@ Each service ships as its own image:
   behind any hostname or IP without rebuilding.
 
 Images are published to Docker Hub as `frikzy/library-api-backend` and
-`frikzy/library-api-frontend`, each tagged with `latest` and the commit SHA, and
-built for `linux/amd64` and `linux/arm64`.
+`frikzy/library-api-frontend`, each tagged with `latest` and the commit SHA,
+built for `linux/amd64`.
 
 ## Running locally
 
@@ -80,14 +80,14 @@ on AKS).
 
 `.github/workflows/ci-cd.yml` runs on every push to `main`:
 
-1. Builds the backend (Maven) and frontend (Vite).
-2. Builds the multi-arch Docker images and pushes them to Docker Hub, tagged with
-   both `latest` and the commit SHA.
-3. Bumps the image tags in `k8s/kustomization.yaml` (via `kustomize edit set image`)
+1. Builds the backend and frontend Docker images (multi-stage — Maven/Vite compile
+   from source inside the image) and pushes them to Docker Hub for `linux/amd64`,
+   tagged with both `latest` and the commit SHA.
+2. Bumps the image tags in `k8s/kustomization.yaml` (via `kustomize edit set image`)
    to the new commit SHA and commits that change back to `main`.
 
 **Argo CD**, running inside the cluster, watches the `k8s/` path of this repo and
-auto-syncs. When step 3's commit lands, Argo CD performs a rolling update, so the
+auto-syncs. When step 2's commit lands, Argo CD performs a rolling update, so the
 cluster state always matches Git (GitOps). CI never needs credentials to the cluster.
 
 ```
