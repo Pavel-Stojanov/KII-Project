@@ -15,7 +15,9 @@ spec:
     spec:
       containers:
         - name: backend
-          image: frikzy/library-api-backend:latest
+          # Locally-built image imported via `k3d image import` — not pulled from a registry.
+          image: library-api-backend:local
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
           envFrom:

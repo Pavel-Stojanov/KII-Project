@@ -40,7 +40,11 @@ built for `linux/amd64`.
 
 ### Docker Compose
 
+Secrets are read from a gitignored `.env` file (never committed). Create one from
+the template before the first run:
+
 ```bash
+cp .env.example .env   # then edit .env and set real values
 docker compose up --build
 ```
 
@@ -63,18 +67,82 @@ All resources live in a dedicated `library-api` namespace and are assembled by
 | Resource | Files | Role |
 | --- | --- | --- |
 | **Namespace** | `namespace.yaml` | Isolates every resource under `library-api`. |
-| **StatefulSet** + headless Service | `mongodb/statefulset.yaml`, `mongodb/service.yaml` | MongoDB with a `volumeClaimTemplate` PVC for durable storage and stable identity. |
-| ConfigMap + Secret | `mongodb/configmap.yaml`, `mongodb/secret.yaml` | MongoDB non-secret settings and credentials. |
-| **Deployment** (backend, 2 replicas) | `backend/deployment.yaml` | Spring Boot API with readiness/liveness probes on `/actuator/health`. |
-| ConfigMap + Secret | `backend/configmap.yaml`, `backend/secret.yaml` | Backend app config, DB connection, and JWT secret, injected via `envFrom`. |
+| **StatefulSet** (mongodb, 3 replicas) + headless Service | `mongodb/statefulset.yaml`, `mongodb/service.yaml` | 3-member MongoDB replica set (`rs0`) with a per-pod `volumeClaimTemplate` PVC and stable network identity. Members authenticate to each other with a shared keyfile. |
+| **Job** (replica-set init) | `mongodb/rs-init-job.yaml` | Argo CD `PostSync` hook that idempotently runs `rs.initiate()` once all 3 members are reachable. |
+| ConfigMap + SealedSecret(s) | `mongodb/configmap.yaml`, `mongodb/sealedsecret.yaml`, `mongodb/keyfile.sealedsecret.yaml` | MongoDB settings, root credentials, and the replica-set keyfile (the secrets are encrypted — see [Secrets](#secrets-sealed-secrets)). |
+| **Deployment** (backend, 3 replicas) | `backend/deployment.yaml` | Spring Boot API with readiness/liveness probes on `/actuator/health`. |
+| ConfigMap + SealedSecret | `backend/configmap.yaml`, `backend/sealedsecret.yaml` | Backend config, the replica-set connection string, and the JWT secret, injected via `envFrom`. |
 | **Service** (backend, ClusterIP) | `backend/service.yaml` | In-cluster access on `:8080`. |
-| **Deployment** (frontend, 2 replicas) | `frontend/deployment.yaml` | nginx serving the React bundle. |
+| **Deployment** (frontend, 3 replicas) | `frontend/deployment.yaml` | nginx serving the React bundle. |
 | **Service** (frontend, ClusterIP) | `frontend/service.yaml` | In-cluster access on `:80`. |
 | **Ingress** | `ingress.yaml` | Routes `/api`, `/swagger-ui`, `/v3/api-docs`, `/actuator` to the backend and everything else (`/`) to the frontend. |
 
 The MongoDB PVC requests no explicit `storageClassName`, so it binds to whatever
 default StorageClass the cluster provides (`local-path` on k3s/k3d, `managed-csi`
 on AKS).
+
+### MongoDB replica set
+
+MongoDB runs as a 3-member replica set (`rs0`) rather than a single instance, so the
+database survives losing a pod (a 3-member set keeps a writable primary as long as
+two members are up). The StatefulSet starts each `mongod` with `--replSet rs0` and a
+shared `--keyFile` for member authentication; `mongodb/rs-init-job.yaml` then runs
+`rs.initiate()` as an Argo CD `PostSync` hook. The backend's `SPRING_MONGODB_URI`
+lists all three members and `replicaSet=rs0`.
+
+**Cutover on a cluster that already ran the old single-node MongoDB:** the root
+password lives in the existing PVC and `MONGO_INITDB_*` only seeds it on an *empty*
+data dir, so the rotated credentials and the replica set won't initialize over old
+data. Wipe the MongoDB volumes once at cutover (the demo data is re-created by the
+backend's `DataSeeder` on startup):
+
+```bash
+kubectl delete statefulset mongodb -n library-api
+# The PVCs are named mongodb-data-mongodb-<n> and are NOT deleted with the
+# StatefulSet — remove them explicitly to wipe the old data:
+kubectl get pvc -n library-api | grep mongodb-data
+kubectl delete pvc -n library-api mongodb-data-mongodb-0   # repeat per replica
+# Argo CD then recreates the StatefulSet, fresh PVCs, and runs the init hook.
+```
+
+If the init hook ever needs to be run by hand:
+
+```bash
+kubectl exec -n library-api mongodb-0 -- mongosh \
+  -u <root-user> -p <root-pass> --authenticationDatabase admin \
+  --eval 'rs.initiate({_id:"rs0",members:[
+    {_id:0,host:"mongodb-0.mongodb.library-api.svc.cluster.local:27017"},
+    {_id:1,host:"mongodb-1.mongodb.library-api.svc.cluster.local:27017"},
+    {_id:2,host:"mongodb-2.mongodb.library-api.svc.cluster.local:27017"}]})'
+```
+
+### Secrets (Sealed Secrets)
+
+No plaintext secret is committed. Raw `Secret` manifests (`k8s/**/secret.yaml`,
+`k8s/mongodb/keyfile.secret.yaml`) are **gitignored**; only their encrypted
+[Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) counterparts
+(`*.sealedsecret.yaml`) are committed. The sealed-secrets controller in the cluster
+is the only thing that can decrypt them, producing the real `Secret`s at runtime.
+
+One-time setup, and whenever a secret value changes:
+
+```bash
+# 1. Install the controller in the target cluster (once).
+kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/latest/download/controller.yaml
+# 2. Install the kubeseal CLI (macOS): brew install kubeseal
+
+# 3. Fill in the raw, gitignored secret sources from the templates:
+cp k8s/backend/secret.example.yaml  k8s/backend/secret.yaml    # edit values
+cp k8s/mongodb/secret.example.yaml  k8s/mongodb/secret.yaml    # edit values
+#    (the replica-set keyfile is generated automatically by the script)
+
+# 4. Seal them against the running cluster, then commit only the sealed output.
+./k8s/seal-secrets.sh
+git add k8s/**/*.sealedsecret.yaml
+```
+
+> Sealing is cluster-specific: a SealedSecret is encrypted with one cluster's
+> controller key and will not decrypt in another. Re-seal after recreating a cluster.
 
 ## CI/CD pipeline (GitHub Actions → Argo CD)
 
@@ -128,6 +196,13 @@ helm upgrade --install ingress-nginx ingress-nginx \
 
 kubectl create namespace argocd
 kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+
+# Install the sealed-secrets controller and seal the secrets for THIS cluster
+# (see "Secrets" above) before registering the app, or the first sync has no
+# Secrets to decrypt.
+kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/latest/download/controller.yaml
+./k8s/seal-secrets.sh   # commit & push the resulting *.sealedsecret.yaml
+
 kubectl apply -f argocd/application.yaml
 ```
 

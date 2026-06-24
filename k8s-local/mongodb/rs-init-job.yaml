@@ -1,0 +1,52 @@
+# Initiates the MongoDB replica set once all 3 members are reachable.
+# Runs as an Argo CD PostSync hook so it executes after each sync; it is
+# idempotent (only initiates when the set is NotYetInitialized).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongodb-rs-init
+  namespace: library-api
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: rs-init
+          image: mongo:7
+          envFrom:
+            - secretRef:
+                name: mongodb-secret
+          command:
+            - bash
+            - -c
+            - |
+              set -euo pipefail
+              MEMBERS="mongodb-0.mongodb.library-api.svc.cluster.local mongodb-1.mongodb.library-api.svc.cluster.local mongodb-2.mongodb.library-api.svc.cluster.local"
+              # Block until every member answers an unauthenticated ping.
+              for h in $MEMBERS; do
+                until mongosh --quiet --host "$h" --eval "db.adminCommand('ping').ok" >/dev/null 2>&1; do
+                  echo "waiting for $h ..."; sleep 3
+                done
+              done
+              PRIMARY="mongodb-0.mongodb.library-api.svc.cluster.local"
+              AUTH="-u $MONGO_INITDB_ROOT_USERNAME -p $MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin"
+              STATE=$(mongosh --quiet --host "$PRIMARY" $AUTH --eval "try { rs.status().ok } catch (e) { print(e.codeName) }")
+              echo "current replica-set state: $STATE"
+              if echo "$STATE" | grep -q "NotYetInitialized"; then
+                mongosh --quiet --host "$PRIMARY" $AUTH --eval '
+                  rs.initiate({
+                    _id: "rs0",
+                    members: [
+                      { _id: 0, host: "mongodb-0.mongodb.library-api.svc.cluster.local:27017" },
+                      { _id: 1, host: "mongodb-1.mongodb.library-api.svc.cluster.local:27017" },
+                      { _id: 2, host: "mongodb-2.mongodb.library-api.svc.cluster.local:27017" }
+                    ]
+                  })'
+                echo "replica set rs0 initiated"
+              else
+                echo "replica set already initialized; nothing to do"
+              fi
