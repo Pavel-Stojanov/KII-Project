@@ -91,8 +91,11 @@ jobs:
 
       - name: Install Kustomize
         run: |
-          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
-          sudo mv kustomize /usr/local/bin/
+          VERSION=v5.4.3
+          curl -fsSL -o kustomize.tar.gz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${VERSION}/kustomize_${VERSION}_linux_amd64.tar.gz"
+          tar -xzf kustomize.tar.gz
+          sudo install kustomize /usr/local/bin/kustomize
 
       - name: Set image tags to the current commit
         working-directory: k8s
